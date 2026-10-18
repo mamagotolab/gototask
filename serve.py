@@ -787,6 +787,28 @@ def ranges(projects):
 
 
 WEEKS = {"this": "今週", "last": "先週", "custom": "日付を指定"}
+# 週報の書き出し方：(選択肢の名前, 拡張子, AI への書き方の指示)
+FORMATS = {
+    "md": ("Markdown", "md", "Markdown で書く（見出しは ##、箇条書きは -）"),
+    "txt": ("テキスト", "txt", "テキストで書く。#・**・表などの Markdown の記号は使わず、見出しは「■」、箇条書きは「・」にして、メールやチャットにそのまま貼れる形にする"),
+    "html": ("HTML", "html", "1つで開ける HTML ファイルで書く。CSS はファイルの中に書き、外部のファイル・JavaScript は使わない。見出し・箇条書き・必要なら表で読みやすくし、印刷しても崩れないようにする"),
+}
+
+
+def md_to_text(md):
+    """週報の材料（Markdown）を、記号の無いテキストに（メール・チャットに貼る用）。"""
+    out = []
+    for l in md.splitlines():
+        if l.startswith("### "):
+            l = "◆ " + l[4:]
+        elif l.startswith("## "):
+            l = "■ " + l[3:]
+        elif l.startswith("# "):
+            l = "【" + l[2:] + "】"
+        elif l.startswith("- "):
+            l = "・" + l[2:]
+        out.append(l)
+    return "\n".join(out)
 
 
 def report_period(c):
@@ -834,6 +856,8 @@ def view_report(tasks, projects, c):
     scope = rs[r] if r else [p for p in projects]
     name = r or "すべて"
     wk = c.hist.get("wk") if c.hist.get("wk") in WEEKS else "this"
+    fmt = c.hist.get("fmt") if c.hist.get("fmt") in FORMATS else "md"
+    fname, ext, how = FORMATS[fmt]
     bar = (f'<form class="hist" method="get" action="/"><input type="hidden" name="v" value="report">'
            f'<select name="r" onchange="this.form.submit()" aria-label="範囲"><option value="">すべてのプロジェクト</option>'
            + "".join(f'<option{" selected" if k == r else ""}>{esc(k)}</option>' for k in rs) + '</select>'
@@ -842,7 +866,9 @@ def view_report(tasks, projects, c):
            + (f'<input type="date" name="from" value="{esc(a)}" onchange="this.form.submit()" aria-label="いつから"><span class="mut">〜</span>'
               f'<input type="date" name="to" value="{esc(b)}" onchange="this.form.submit()" aria-label="いつまで">' if wk == "custom"
               else f'<span class="mut small">{esc(label)}</span>')
-           + '<a class="lnk small" href="/settings#ranges">範囲を決める</a></form>')
+           + f'<select name="fmt" onchange="this.form.submit()" aria-label="週報の形式">'
+           + "".join(f'<option value="{k}"{" selected" if k == fmt else ""}>{v[0]}で書き出す</option>' for k, v in FORMATS.items())
+           + '</select><a class="lnk small" href="/settings#ranges">範囲を決める</a></form>')
     body, md, tot = [], [], dict(done=0, moved=0, new=0, late=0)
     undated = 0
     for p in scope:
@@ -882,14 +908,17 @@ def view_report(tasks, projects, c):
     if missing:
         note.append("範囲の設定に、見つからないプロジェクトがあります：" + "、".join(missing))
     material = "\n".join([head, nums, *md]).strip()
+    if fmt == "txt":
+        material = md_to_text(material)
     ask = (f"次の材料から「{name}」の週報（{label}）を書いてください。\n"
            "- 材料と TASKS.md の経過（タスクの下の「- 日付 内容」）に書いてあることだけを使う。書いていないことを推測で補わない（「順調」「来週やる」などを足さない）\n"
            "- 順番は「成果」「進んでいること」「課題・判断してほしいこと」「来週の予定」。1項目1行で短く\n"
            "- 足りない情報は、最後に「確認したいこと」として並べる\n"
-           f"- 書き上げたら 週報/{b}_{name}.md に保存する\n\n---\n{material}")
+           f"- {how}\n"
+           f"- 書き上げたら 週報/{b}_{name}.{ext} に保存する\n\n---\n{material}")
     summary = (f'<section class="review"><div class="rv-nums"><span><b>{tot["done"]}</b>済</span><span><b>{tot["moved"]}</b>進んだ</span>'
                f'<span><b>{tot["new"]}</b>新しく</span><span><b>{tot["late"]}</b>期限切れ</span>'
-               f'<button type="button" class="lnk" data-copy="rpmd">材料をコピー</button>'
+               f'<button type="button" class="lnk" data-copy="rpmd">材料をコピー（{fname if fmt == "txt" else "Markdown"}）</button>'
                f'<button type="button" class="lnk" data-copy="rpask">AI に頼む文をコピー</button></div>'
                + "".join(f'<p class="mut small">{esc(n)}</p>' for n in note)
                + f'<textarea id="rpmd" hidden>{esc(material)}</textarea><textarea id="rpask" hidden>{esc(ask)}</textarea></section>')
@@ -1745,7 +1774,7 @@ class Handler(BaseHTTPRequestHandler):
                 view = view if any(view[2:] in t["who"] for t in tasks) else "wait"
             elif view not in ("today", "wait", "imp", "all", "report") and not (view.startswith("p:") and view[2:] in projects):
                 view = "today"
-            hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to", "r", "wk")}
+            hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to", "r", "wk", "fmt")}
             return self.send(200, page(view, q.get("s", [""])[0], q.get("o", [""])[0], hist, q.get("m", [""])[0]))
         if u.path == "/open":
             if self.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -1921,7 +1950,7 @@ class Handler(BaseHTTPRequestHandler):
         tasks, projects, _ = T.load()
         if view.startswith("p:") and view[2:] not in projects:
             view = "today"
-        hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to", "r", "wk")}
+        hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to", "r", "wk", "fmt")}
         return page(view, "", q.get("o", [""])[0], hist, m, keep)
 
     def log_message(self, *a):
