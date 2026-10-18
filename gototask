@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""gototask のターミナル用コマンド（短縮名 gtask）。番号は `ls` に出る番号。
+
+  gtask init                       今いるフォルダに TASKS.md を作って登録（CLAUDE.md / AGENTS.md に使い方を1節）
+  gtask ls                         未完了の一覧（番号つき）
+  gtask ls 営業                      プロジェクトで絞る（名前の一部でよい）
+  gtask add "請求書の件を確認"         今いるフォルダのプロジェクトへ（無ければ受信箱。フォルダが背景に付く）
+  gtask add "提案書の構成" -p 営業/資料   プロジェクト（/区分）を指定
+  gtask add "提案書の構成 #営業/資料"     タイトル中の #プロジェクト/区分 でも同じ
+  gtask today                      今日の一覧（期限が今日まで／今日やる／持ち越し）
+  gtask today 2 4                  今日やるに選ぶ（--off で外す）
+  gtask done 3 5                   済にする
+  gtask drop 4                     やらないにする（済とは分けて残す）
+  gtask del 4                      削除（data/trash.md に残る）
+  gtask sync                       元の資料（出典）へ未反映の済・やらないを一覧
+  gtask sync --mark                それらを「反映済み」にする（書き戻した後に使う）
+  gtask show 2                     背景とノートを表示
+  gtask open [--all]               今いるフォルダのタスクをブラウザで開く
+  gtask count                      「残8 優先2」
+  gtask gsync --auth               Google ToDo 連動の許可（最初に1回）
+  gtask gsync                      Google ToDo と今すぐ同期（普段はサーバーが5分ごと・操作直後に自動）
+"""
+import argparse
+import os
+import re
+import sys
+import urllib.request
+import webbrowser
+from pathlib import Path
+from urllib.parse import urlencode
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tasksmd as T  # noqa: E402
+
+PORT = int(os.environ.get("GOTOTASK_PORT", "8765"))
+URL = os.environ.get("GOTOTASK_URL", f"http://localhost:{PORT}/")
+TTY = sys.stdout.isatty()
+
+
+def c(code, s):
+    return f"\033[{code}m{s}\033[0m" if TTY else s
+
+
+def load():
+    tasks, projects, pfile = T.load()
+    return [t for t in tasks if not t["done"]], projects, pfile
+
+
+def find_project(projects, q):
+    """完全一致 → 部分一致（大文字小文字無視）の順。候補が複数なら終了。無ければ None。"""
+    if q in projects:
+        return q
+    hits = [p for p in projects if q.lower() in p.lower()]
+    if len(hits) > 1:
+        sys.exit(f"プロジェクトが複数当てはまります: {' / '.join(hits)}")
+    return hits[0] if hits else None
+
+
+def pick(open_, nums):
+    out = []
+    for n in nums:
+        if not 1 <= n <= len(open_):
+            sys.exit(f"{n} 番はありません（gtask ls で番号を確認）")
+        out.append(open_[n - 1])
+    return out
+
+
+def unchanged(text, t):
+    """一覧を読んだ後に誰か（AI・画面・Obsidian）が書き換えていたら、別のタスクを触らないよう止める。"""
+    lines = text.split("\n")
+    if t["line"] >= len(lines) or lines[t["line"]] != t["raw"]:
+        sys.exit(f"「{t['title']}」の行が変わっています。gtask ls で確認してからやり直してください")
+
+
+def apply(ts, fn, *a):
+    """選んだタスクを書き換える（ファイルごとに、後ろの行から）。"""
+    with T.LOCK:
+        for f in {t["file"] for t in ts}:
+            text = T.read(f)
+            for t in sorted((t for t in ts if t["file"] == f), key=lambda t: -t["line"]):
+                unchanged(text, t)
+                text = fn(text, t, *a)
+            T.write(f, text)
+
+
+def here_project(pfile):
+    """今いるフォルダ（の上）に登録済みの TASKS.md があれば、そのプロジェクト名。"""
+    cwd = Path.cwd().resolve()
+    hits = [(len(f.parent.parts), p) for p, f in pfile.items() if f != T.INBOX_FILE and cwd.is_relative_to(f.parent)]
+    return max(hits, key=lambda h: h[0])[1] if hits else None  # 入れ子なら一番深いフォルダ（同じファイル内なら先頭のプロジェクト）
+
+
+def cmd_init(args):
+    d = Path(args.dir or ".").resolve()
+    if not d.is_dir():
+        sys.exit(f"フォルダがありません: {d}")
+    for line in T.init(d, agents=args.agents):
+        print(line)
+    print(c("2", f"→ {d / T.NAME}"))
+    if not args.agents:
+        print(c("2", "Claude Code・Codex に使い方を伝えるには、CLAUDE.md か AGENTS.md に次の節を書き足してください"
+                     "（gtask init --agents なら自動で足します）:") + T.AGENT_NOTE.rstrip())
+
+
+def cmd_ls(args):
+    open_, projects, _ = load()
+    proj = None
+    if args.project:
+        proj = find_project(projects, args.project)
+        if proj is None:
+            sys.exit(f"プロジェクトが見つかりません: {args.project}")
+    cur = (None, None)
+    for n, t in enumerate(open_, 1):
+        if proj and t["project"] != proj:
+            continue
+        if cur[0] != t["project"]:
+            print(c("1", f"# {t['project']}"))
+        if cur != (t["project"], t["category"]) and t["category"]:
+            print(c("2", f"  {t['category']}"))
+        cur = (t["project"], t["category"])
+        mark = c("31", "●") if t["important"] else " "
+        extra = "".join(c("33", f" @{w}") for w in t["who"])
+        if t["due"]:
+            extra += c("2", f" 期限{t['due']}")
+        if t["memo"] or t["refs"]:
+            extra += c("2", " …")
+        print(f"{n:>4} {mark} {t['title']}{extra}")
+
+
+def cmd_add(args):
+    title = " ".join(" ".join(args.title).split())
+    target = args.project or ""
+    m = re.search(r"(?:^|\s)#(\S+)", title)
+    if m and not target:
+        target = m.group(1)
+        title = (title[:m.start()] + title[m.end():]).strip()
+    if not title:
+        sys.exit("タスク名が空です")
+    _, projects, pfile = load()
+    project, category = here_project(pfile) or T.INBOX, ""
+    if target:
+        pq, _, category = target.partition("/")
+        project = find_project(projects, pq) or pq
+        if project not in projects:
+            print(c("2", f"新しいプロジェクトを作ります（受信箱のファイルに）: {project}"))
+    f = pfile.get(project, T.INBOX_FILE)
+    cwd = Path.cwd().resolve()
+    base = T.base_dir(f)
+    ref = ""
+    if not args.no_ref and cwd != T.HOME and cwd != base:
+        ref = str(cwd.relative_to(base)) if cwd.is_relative_to(base) else str(cwd)
+        ref = ref if f != T.INBOX_FILE else "~/" + ref if cwd.is_relative_to(T.HOME) else ref
+    with T.LOCK:
+        T.write(f, T.add_task(T.read(f), pfile.name(project), category, title, args.memo, ref,
+                                default=T.default_project(f)))
+    where = project + (f" / {category}" if category else "")
+    print(f"追加しました（{where}）: {title}" + c("2", f"  背景: {ref}" if ref else ""))
+
+
+def cmd_done(args):
+    open_, _, _ = load()
+    ts = pick(open_, args.num)
+    apply(ts, T.set_state, "x")
+    for t in ts:
+        print(f"済: {t['title']}")
+
+
+def cmd_drop(args):
+    open_, _, _ = load()
+    ts = pick(open_, args.num)
+    apply(ts, T.set_state, "-")
+    for t in ts:
+        print(f"やらない: {t['title']}")
+
+
+def cmd_today(args):
+    open_, _, _ = load()
+    if args.num:
+        ts = pick(open_, args.num)
+        apply(ts, T.set_today, not args.off)
+        for t in ts:
+            print(("今日から外す: " if args.off else "今日やる: ") + t["title"])
+        return
+    num = {id(t): n for n, t in enumerate(open_, 1)}
+    due, picked, carry = T.today_groups(open_)
+    for head, ts in [("期限が今日まで", due), ("今日やる", picked), ("持ち越し", carry)]:
+        if ts:
+            print(c("1", head))
+            for t in ts:
+                mark = c("31", "●") if t["important"] else " "
+                print(f"{num[id(t)]:>4} {mark} {t['title']}" + c("2", f"  ({t['project']})"))
+    if not (due or picked or carry):
+        print("今日やるものは未選択です（gtask today 番号 で選ぶ）")
+
+
+def cmd_del(args):
+    open_, _, _ = load()
+    ts = pick(open_, args.num)
+    with T.LOCK:
+        for f in {t["file"] for t in ts}:
+            text = T.read(f)
+            for t in sorted((t for t in ts if t["file"] == f), key=lambda t: -t["line"]):
+                unchanged(text, t)
+                text, block = T.delete_task(text, t)
+                T.to_trash(block, f"{t['project']} / {t['category']}")
+                print(f"削除: {t['title']}")
+            T.write(f, text)
+
+
+def cmd_sync(args):
+    tasks, _, _ = T.load()
+    pending = T.unsynced(tasks)
+    if args.brief:
+        if pending:
+            print(f"gototask: 元の資料へ未反映の済・やらないが {len(pending)} 件あります。"
+                  "`gtask sync` で確認し、Skill gototask の手順で出典へ書き戻してから `gtask sync --mark` してください。")
+        return
+    if args.mark:
+        with T.LOCK:
+            for f in {t["file"] for t in pending}:
+                ts = [t for t in pending if t["file"] == f]
+                T.write(f, T.mark_synced(T.read(f), ts, T.today_str()))
+        print(f"反映済みにしました: {len(pending)}件")
+        return
+    if not pending:
+        print("未反映はありません")
+    for t in pending:
+        print(f"[{'やらない' if t['dropped'] else '済'}] {t['title']}")
+        for src in t["src"]:
+            print(f"    出典: {src}")
+        print(c("2", f"    ({t['file']})"))
+
+
+def cmd_show(args):
+    open_, _, _ = load()
+    for t in pick(open_, args.num):
+        print(c("1", ("● " if t["important"] else "") + t["title"])
+              + c("2", f"  ({t['project']}{' / ' + t['category'] if t['category'] else ''})"))
+        for w in t["who"]:
+            print(c("33", f"  @{w}"))
+        if t["due"]:
+            print(f"  期限: {t['due']}")
+        for r in t["refs"]:
+            print(f"  背景: {r}")
+        if t["memo"]:
+            print()
+            for line in t["memo"]:
+                print(f"  {line}")
+        print(c("2", f"  {t['file']}:{t['line'] + 1}"))
+
+
+def cmd_open(args):
+    url = URL if args.all else URL + "?" + urlencode({"v": f"dir:{Path.cwd().resolve()}"})
+    webbrowser.open(url)
+
+
+def cmd_serve(args):
+    import serve
+    serve.main(browser=not args.no_browser)
+
+
+def cmd_autostart(args):
+    import autostart
+    if args.mode == "on":
+        autostart.enable()
+    elif args.mode == "off":
+        autostart.disable()
+    print("PC の起動時に gototask も起動します" if autostart.enabled() else "自動起動はしません")
+
+
+def cmd_count(_):
+    open_, _, _ = load()
+    print(f"残{len(open_)} 優先{sum(t['important'] for t in open_)}")
+
+
+def cmd_gsync(args):
+    import gsync
+    if args.auth:
+        if not gsync.CLIENT.exists():
+            sys.exit(f"先に OAuth クライアントのJSONを {gsync.CLIENT} に置いてください")
+        gsync.authorize()
+    if not gsync.configured():
+        sys.exit("未設定です（gtask gsync --auth）")
+    s = gsync.sync()
+    print("同期しました: " + "、".join(f"{k}{v}件" for k, v in s.items()))
+
+
+def poke_server():
+    """変更をサーバーへ知らせ、Google ToDo へすぐ送ってもらう（サーバーが止まっていれば何もしない）。"""
+    try:
+        urllib.request.urlopen(URL + "sync", timeout=1)
+    except OSError:
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="gtask", description="gototask のターミナル用コマンド",
+                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("init", help="TASKS.md を作って登録")
+    s.add_argument("dir", nargs="?", help="フォルダ（省略時は今いるフォルダ）")
+    s.add_argument("--agents", action="store_true", help="CLAUDE.md / AGENTS.md に TASKS.md の使い方を書き足す")
+    s.add_argument("--no-agents", action="store_true", help=argparse.SUPPRESS)  # 旧オプション（今は書き足さないのが既定）
+    s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("ls", help="未完了の一覧（番号つき）")
+    s.add_argument("project", nargs="?", help="プロジェクト名（一部でよい）")
+    s.set_defaults(fn=cmd_ls)
+    s = sub.add_parser("add", help="追加（今いるフォルダのプロジェクトへ）")
+    s.add_argument("title", nargs="+")
+    s.add_argument("-p", "--project", help="プロジェクト[/区分]（一部一致。無ければ新規作成）")
+    s.add_argument("-m", "--memo", default="", help="ノート（任意）")
+    s.add_argument("--no-ref", action="store_true", help="今いるフォルダを背景に付けない")
+    s.set_defaults(fn=cmd_add)
+    for name, fn, h in [("done", cmd_done, "済にする"), ("drop", cmd_drop, "やらないにする"),
+                        ("del", cmd_del, "削除（trash.md に残る）"),
+                        ("show", cmd_show, "背景とノートを表示")]:
+        s = sub.add_parser(name, help=h)
+        s.add_argument("num", type=int, nargs="+", help="ls の番号")
+        s.set_defaults(fn=fn)
+    s = sub.add_parser("today", help="今日の一覧／番号を付けると今日やるに選ぶ")
+    s.add_argument("num", type=int, nargs="*", help="ls の番号")
+    s.add_argument("--off", action="store_true", help="今日から外す")
+    s.set_defaults(fn=cmd_today)
+    s = sub.add_parser("open", help="今いるフォルダのタスクをブラウザで開く")
+    s.add_argument("--all", action="store_true", help="全体を開く")
+    s.set_defaults(fn=cmd_open)
+    sub.add_parser("count", help="残り件数").set_defaults(fn=cmd_count)
+    s = sub.add_parser("serve", help="画面を起動してブラウザで開く（もう動いていれば開くだけ）")
+    s.add_argument("--no-browser", action="store_true", help="ブラウザを開かない")
+    s.set_defaults(fn=cmd_serve)
+    s = sub.add_parser("autostart", help="PC の起動時に画面も起動する（on / off / 今の状態）")
+    s.add_argument("mode", nargs="?", choices=["on", "off"])
+    s.set_defaults(fn=cmd_autostart)
+    s = sub.add_parser("gsync", help="Google ToDo と同期（--auth で最初の許可）")
+    s.add_argument("--auth", action="store_true", help="ブラウザで許可する")
+    s.set_defaults(fn=cmd_gsync)
+    s = sub.add_parser("sync", help="元の資料へ未反映の済・やらないを一覧")
+    s.add_argument("--mark", action="store_true", help="一覧のものを反映済みにする")
+    s.add_argument("--brief", action="store_true", help="未反映があるときだけ1行で知らせる（フック用）")
+    s.set_defaults(fn=cmd_sync)
+    args = ap.parse_args()
+    args.fn(args)
+    if args.cmd in ("add", "done", "drop", "del", "today"):
+        poke_server()
+
+
+if __name__ == "__main__":
+    main()

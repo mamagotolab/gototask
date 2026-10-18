@@ -1,0 +1,9 @@
+# 自分のタスク・設定（受信箱・登録したフォルダ・Google の許可など）
+data/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+# 作者の PC 用の systemd 定義（ほかの PC は gtask autostart on が自分で書く）
+gototask.service

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>gototask の使い方</title>
+<link rel="icon" href="/flask.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>
+/* 色は本体（serve.py の CSS）と同じトークン */
+:root{--bg:#070b14;--glass:rgba(148,178,255,.045);--glass2:rgba(148,178,255,.08);--line:rgba(148,178,255,.11);--line2:rgba(148,178,255,.2);
+--fg:#e4ebf7;--sub:#aab6cc;--mut:#6c7a93;--acc:#4cc9ff;--acc2:#7c8cff;--pri:#b18cff;--who:#f3c46b;
+--grad:linear-gradient(135deg,#4cc9ff,#7c8cff 60%,#b18cff);--input:rgba(10,16,30,.7);--gridc:rgba(124,160,255,.07)}
+@media (prefers-color-scheme:light){:root{--bg:#eef2f9;--glass:rgba(255,255,255,.6);--glass2:rgba(255,255,255,.92);--line:rgba(40,64,120,.1);
+--line2:rgba(40,64,120,.2);--fg:#121a2b;--sub:#3d4a63;--mut:#7a869c;--acc:#0a8fd6;--acc2:#4a5cf0;--pri:#7a4cf0;--who:#b07a10;
+--grad:linear-gradient(135deg,#0aa6e8,#4a5cf0 60%,#8a5cf0);--input:#fff;--gridc:rgba(40,80,160,.07)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;color:var(--fg);background:var(--bg);font:17.5px/1.85 "IBM Plex Sans JP","Noto Sans JP",system-ui,sans-serif;
+letter-spacing:.01em;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+.en,h2 .no,.toc a i,.kbd,.chip{font-family:"Space Grotesk","IBM Plex Sans JP",sans-serif}
+code,.term{font-family:"JetBrains Mono",ui-monospace,monospace}
+a{color:var(--acc)}
+
+/* 背景：ゆっくり流れるグリッドと光 */
+.bg{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.bg .grid{position:absolute;inset:-80px;background-image:linear-gradient(var(--gridc) 1px,transparent 1px),linear-gradient(90deg,var(--gridc) 1px,transparent 1px);
+background-size:56px 56px;mask-image:radial-gradient(ellipse at 50% 0%,#000 30%,transparent 75%);animation:drift 30s linear infinite}
+.bg .orb{position:absolute;width:620px;height:620px;border-radius:50%;filter:blur(90px);opacity:.28}
+.bg .o1{background:#4cc9ff;top:-260px;right:-120px;animation:float1 18s ease-in-out infinite}
+.bg .o2{background:#9b7cff;bottom:-300px;left:-200px;animation:float2 22s ease-in-out infinite}
+@keyframes drift{to{transform:translate(56px,56px)}}
+@keyframes float1{50%{transform:translate(-80px,60px)}}
+@keyframes float2{50%{transform:translate(90px,-50px)}}
+
+.wrap{max-width:1120px;margin:0 auto;padding:0 16px;display:grid;grid-template-columns:220px 1fr;gap:48px}
+
+/* 目次（いま読んでいる節が光る） */
+.toc{position:sticky;top:24px;align-self:start;display:flex;flex-direction:column;gap:2px;font-size:14px}
+.toc a{position:relative;display:flex;gap:10px;padding:7px 12px;border-radius:10px;color:var(--mut);text-decoration:none;transition:.25s}
+.toc a i{font-style:normal;font-size:12px;opacity:.7;width:18px}
+.toc a:hover{color:var(--fg);background:var(--glass)}
+.toc a.on{color:var(--fg);background:var(--glass2)}
+.toc a.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--grad);box-shadow:0 0 12px var(--acc)}
+.toc .back{margin-top:16px;color:var(--acc)}
+@media (max-width:860px){.wrap{grid-template-columns:1fr;gap:0}.toc{display:none}}
+
+/* 冒頭 */
+header{padding:72px 0 28px;grid-column:1/-1;display:flex;align-items:center;gap:28px}
+header img{width:96px;height:96px;filter:drop-shadow(0 10px 30px rgba(76,201,255,.35));animation:bob 5s ease-in-out infinite}
+@keyframes bob{50%{transform:translateY(-8px) rotate(-3deg)}}
+header h1{margin:0;font:600 clamp(34px,6vw,54px)/1.1 "Space Grotesk",sans-serif;letter-spacing:-.01em;
+background:linear-gradient(90deg,#4cc9ff,#7c8cff,#b18cff,#4cc9ff);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+animation:shine 8s linear infinite}
+@keyframes shine{to{background-position:300% 0}}
+header p{margin:8px 0 0;color:var(--sub);min-height:1.85em}
+header p .caret{display:inline-block;width:.55em;height:1.1em;margin-left:2px;vertical-align:-.15em;background:var(--acc);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (max-width:600px){header{padding-top:40px;gap:16px}header img{width:64px;height:64px}}
+
+main{min-width:0;padding-bottom:120px}
+section{margin:0 0 30px;padding:30px 32px;border:1px solid var(--line);border-radius:22px;background:var(--glass);backdrop-filter:blur(12px);
+position:relative;overflow:hidden}
+section::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+background:linear-gradient(115deg,transparent 40%,rgba(124,180,255,.07) 50%,transparent 60%);background-size:250% 100%;background-position:150% 0}
+section.in::after{animation:sweep 1.6s ease-out .2s}
+@keyframes sweep{to{background-position:-100% 0}}
+@media (max-width:600px){section{padding:22px 18px;border-radius:18px}}
+h2{margin:0 0 14px;font-size:24px;font-weight:600;display:flex;align-items:baseline;gap:14px}
+h2 .no{font-size:14px;font-weight:600;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;letter-spacing:.08em}
+h3{margin:26px 0 8px;font-size:18px;font-weight:600}
+p{margin:8px 0}ul{margin:8px 0;padding-left:1.3em}li{margin:4px 0}
+.mut{color:var(--mut);font-size:15px}
+code{font-size:.88em;padding:2px 7px;border-radius:6px;background:var(--glass2);border:1px solid var(--line)}
+.kbd{display:inline-block;padding:1px 9px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:7px;font-size:14px;background:var(--glass2)}
+
+/* 出てくるときの動き */
+.rv{opacity:0;transform:translateY(26px);filter:blur(6px);transition:opacity .8s ease,transform .8s cubic-bezier(.2,.8,.2,1),filter .8s ease}
+.rv.in{opacity:1;transform:none;filter:none}
+
+/* 表 */
+.tbl{display:grid;grid-template-columns:max-content 1fr;border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:12px 0}
+.tbl>div{padding:10px 16px;border-top:1px solid var(--line)}
+.tbl>div:nth-child(-n+2){border-top:0}
+.tbl>div:nth-child(odd){color:var(--acc);font-weight:500;background:var(--glass)}
+@media (max-width:600px){.tbl{grid-template-columns:1fr}.tbl>div:nth-child(odd){border-top:1px solid var(--line)}.tbl>div:first-child{border-top:0}.tbl>div:nth-child(even){border-top:0}}
+
+/* 触れる見本：タスクの1行 */
+.demo{margin:16px 0;padding:6px;border:1px dashed var(--line2);border-radius:18px}
+.demo .lbl{font-size:12px;color:var(--mut);padding:4px 10px}
+.trow{display:flex;align-items:flex-start;gap:14px;padding:14px 16px;border-radius:14px;background:var(--glass2);transition:.3s}
+.trow+.trow{margin-top:6px}
+.chk{position:relative;flex:none;width:24px;height:24px;margin-top:3px;border-radius:7px;border:1.6px solid var(--mut);background:none;cursor:pointer;transition:.25s}
+.chk:hover{border-color:var(--acc);box-shadow:0 0 0 4px rgba(76,201,255,.12)}
+.chk.p1{border-color:var(--pri)}
+.chk::after{content:"";position:absolute;left:7.5px;top:3.5px;width:6px;height:11px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) scale(0);transition:.25s cubic-bezier(.3,1.6,.5,1)}
+.trow.done .chk{background:var(--grad);border-color:transparent}
+.trow.done .chk::after{transform:rotate(45deg) scale(1)}
+.trow.done .tt{color:var(--mut);text-decoration:line-through}
+.chk .ring{position:absolute;inset:-2px;border-radius:9px;border:2px solid var(--acc);opacity:0}
+.trow.done .chk .ring{animation:ring .7s ease-out}
+@keyframes ring{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(2.4)}}
+.tb{flex:1;min-width:0}.tt{font-weight:600;transition:.3s}
+.meta{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:2px;font-size:14.5px;color:var(--sub)}
+.chip{font-size:13px;padding:1px 9px;border-radius:99px;border:1px solid var(--line2)}
+.chip.who{color:var(--who);border-color:transparent;padding:0}
+.chip.due{color:var(--pri)}
+.sun{flex:none;width:34px;height:34px;border:0;border-radius:10px;background:none;color:var(--mut);cursor:pointer;transition:.3s}
+.sun:hover{color:var(--acc);background:var(--glass)}
+.sun.on{color:#ffb84c;filter:drop-shadow(0 0 8px rgba(255,184,76,.7))}
+.sun.on svg{animation:spin 6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 手順 */
+.steps{counter-reset:s;list-style:none;padding:0}
+.steps li{counter-increment:s;position:relative;padding-left:44px;margin:12px 0}
+.steps li::before{content:counter(s);position:absolute;left:0;top:2px;width:28px;height:28px;border-radius:9px;display:grid;place-items:center;
+font:600 14px "Space Grotesk",sans-serif;color:#061020;background:var(--grad)}
+
+/* ターミナル（見えたら打ち込まれる） */
+.term{margin:14px 0;border:1px solid var(--line2);border-radius:14px;background:#050913;color:#cfe3ff;font-size:14px;line-height:1.75;overflow:hidden}
+.term .bar{display:flex;gap:7px;padding:10px 14px;border-bottom:1px solid rgba(148,178,255,.12)}
+.term .bar i{width:11px;height:11px;border-radius:50%;background:#2a3550}
+.term pre{margin:0;padding:14px 18px;white-space:pre-wrap;word-break:break-all;min-height:4em}
+.term .ps{color:#4cc9ff}.term .c{color:#6c7a93}
+.term .cur{display:inline-block;width:.6em;height:1.1em;vertical-align:-.2em;background:#4cc9ff;animation:blink 1s steps(1) infinite}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}
+.card{padding:16px 18px;border:1px solid var(--line);border-radius:16px;background:var(--glass2);transition:.3s}
+.card:hover{transform:translateY(-3px);border-color:var(--line2);box-shadow:0 14px 40px rgba(0,0,0,.25)}
+.card b{display:block;margin-bottom:4px}
+.card p{margin:0;font-size:15px;color:var(--sub)}
+.note{border-left:3px solid var(--acc2);padding:10px 16px;margin:14px 0;background:var(--glass);border-radius:0 12px 12px 0;color:var(--sub);font-size:15.5px}
+
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.rv{opacity:1;transform:none;filter:none}}
+</style>
+</head>
+<body>
+<div class="bg"><div class="grid"></div><div class="orb o1"></div><div class="orb o2"></div></div>
+
+<div class="wrap">
+  <header>
+    <img src="/flask.png" alt="">
+    <div><h1>gototask</h1><p id="typed" data-text="Claude が書いて、私は見るだけ。続くための ToDo。"></p></div>
+  </header>
+
+  <nav class="toc" aria-label="目次">
+    <a href="#idea"><i>01</i>考え方</a>
+    <a href="#screen"><i>02</i>画面</a>
+    <a href="#task"><i>03</i>タスクの操作</a>
+    <a href="#panel"><i>04</i>右の詳細パネル</a>
+    <a href="#project"><i>05</i>プロジェクトと区分</a>
+    <a href="#claude"><i>06</i>Claude との分担</a>
+    <!--home--><a href="#google"><i>07</i>スマホ（Google ToDo）</a><!--/home-->
+    <a href="#term"><i>08</i>ターミナルと gototerm</a>
+    <a href="#file"><i>09</i>ファイルの書き方</a>
+    <a href="#trouble"><i>10</i>困ったとき</a>
+    <a class="back" href="/">← gototask に戻る</a>
+  </nav>
+
+  <main>
+    <section id="idea" class="rv">
+      <h2><span class="no">01</span>考え方</h2>
+      <p>これまでの ToDo アプリが続かなかった理由は、「書くのが面倒」「何の件か忘れる」「機能が多すぎる」の3つでした。gototask はそこを避けるように作っています。</p>
+      <div class="cards">
+        <div class="card"><b>書くのは Claude</b><p>会話で「終わった」「〇〇さんに頼んだ」と言えば、Claude がタスクを直します。</p></div>
+        <div class="card"><b>背景が付いている</b><p>どのタスクにも、元の資料やメールへのリンクとノートが付きます。</p></div>
+        <div class="card"><b>中身はただのテキスト</b><p>プロジェクトごとの <code>TASKS.md</code>。Obsidian の Tasks と同じ書き方なので、Obsidian でもそのまま開けます。</p></div>
+      </div>
+    </section>
+
+    <section id="screen" class="rv">
+      <h2><span class="no">02</span>画面</h2>
+      <p>ブラウザで <a href="/">http://localhost:8765/</a> を開きます。PC を起動すると自動で動いています。</p>
+      <div class="tbl">
+        <div>上の追加欄</div><div>どの画面でも1行で追加できます（<span class="kbd">/</span> で移動）。書き方は次の節。</div>
+        <div>今日</div><div>最初に開く画面。大きく出る「いまやる」1件と「つぎ」、前の日からの「持ち越し」。右の列に「待ち」「今日片付いた」「新着」。</div>
+        <div>待ち</div><div><code>@名前</code> が付いたもの。人ごとにまとまります。</div>
+        <div>優先</div><div>優先の印（⏫）が付いたもの。</div>
+        <div>すべて</div><div>プロジェクトを1行ずつ一覧。並び順は残りの多い順・期限の近い順・名前順から選べます。残りの無いプロジェクトは最後に畳んであります（上の「# プロジェクト」の一覧も同じ）。</div>
+        <div>週報</div><div>範囲（プロジェクトの束）と週を選ぶと、プロジェクトごとに「済んだ」「進んだ」「新しく入った」「来週の期限」「期限切れ」「待ち」を並べます。「材料をコピー」で Markdown に、「AI に頼む文をコピー」で、AI に週報を書いてもらう文ごとコピーします。範囲は「設定」で決めます（例：<code>1課: 営業A, 営業B</code>／<code>営業部: 1課, 2課</code>）。</div>
+        <div>AI に頼む（右上）</div><div>議事録からの更新・今日の記録・残りの点検・繰り返しの登録など、AI に渡す決まった文をコピーできます。</div>
+        <div># プロジェクト ▾</div><div>押すと（または <span class="kbd">p</span>）プロジェクトの一覧が開き、名前で絞り込めます。プロジェクトが増えてもここ1か所で切り替えます。入れた言葉でタスクも探せます（一番下の「タスクを探す」。タイトル・担当・ノート・子タスク、済んだものも対象）。</div>
+      </div>
+      <p class="mut">文字が小さいときは、右上の「A− A＋」で 85〜160% に変えられます。ブラウザが覚えています。<!--home-->右上の点は Google ToDo との同期状態（緑＝正常）。<!--/home--></p>
+    </section>
+
+    <section id="task" class="rv">
+      <h2><span class="no">03</span>タスクの操作</h2>
+      <p>下の見本は実際に押せます（ここで押してもタスクは変わりません）。</p>
+      <div class="demo"><div class="lbl">見本</div>
+        <div class="trow"><button class="chk p1" aria-label="済の切り替え"><span class="ring"></span></button>
+          <div class="tb"><div class="tt">見積もりの型を1枚にする</div>
+            <div class="meta"><span>対象範囲・修正回数・納期を決める</span><span class="chip">資料 1</span><span class="chip due">期限 10-15</span></div></div>
+          <button class="sun" aria-label="今日やる"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg></button></div>
+        <div class="trow"><button class="chk" aria-label="済の切り替え"><span class="ring"></span></button>
+          <div class="tb"><div class="tt">法人用の箱の改定</div><div class="meta"><span class="chip who">@山田さん</span></div></div>
+          <button class="sun" aria-label="今日やる"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg></button></div>
+      </div>
+      <div class="tbl">
+        <div>□ を押す</div><div>済にする（線が引かれて流れていきます）。紫の枠は優先のタスク。</div>
+        <div>☀ を押す</div><div>「今日やる」に入れる。翌日まで残ると「持ち越し」に移ります。</div>
+        <div>タイトルを押す</div><div>右に詳細パネルが開きます（次の節）。<span class="kbd">Esc</span> か × で閉じます。</div>
+      </div>
+      <h3>追加欄の書き方</h3>
+      <p>例）<code>見積もりを送る @山田さん 期限10/20 #営業/見積もり !</code>　入力中に、どう読み取ったかが下に出ます。</p>
+      <div class="tbl">
+        <div>! （先頭か最後）</div><div>優先</div>
+        <div>@名前</div><div>頼んだ相手（「待ち」に出ます）</div>
+        <div>期限10/20</div><div>期限（年は省略可）</div>
+        <div>今日</div><div>今日やるに入れる</div>
+        <div>毎週金曜・毎月末 など</div><div>繰り返し（毎日・平日・毎週・毎週金曜・隔週・毎月・毎月25日・毎月末・毎年）。済にすると次の回ができます</div>
+        <div>#プロジェクト/区分</div><div>入れる先（名前の一部でよい）。省略するとその画面のプロジェクトへ。</div>
+      </div>
+      <h3>キーボード</h3>
+      <div class="tbl">
+        <div><span class="kbd">j</span> <span class="kbd">k</span></div><div>上下に移動</div>
+        <div><span class="kbd">x</span> / <span class="kbd">t</span></div><div>済にする／今日やる</div>
+        <div><span class="kbd">Enter</span> / <span class="kbd">Esc</span></div><div>開く／閉じる</div>
+        <div><span class="kbd">/</span></div><div>追加欄へ</div>
+        <div><span class="kbd">p</span></div><div>プロジェクトを切り替える・タスクを探す</div>
+      </div>
+    </section>
+
+    <section id="panel" class="rv">
+      <h2><span class="no">04</span>右の詳細パネル</h2>
+      <p>タスクの「裏の1枚」です。何の件か、どこまで進んだかをここに残します。</p>
+      <ul>
+        <li><b>期限</b>：日付を選ぶとすぐ保存。「消す」で外します。</li>
+        <li><b>今日</b>：☀ で今日やるに入れる／外す。</li>
+        <li><b>繰り返し</b>：毎日・平日・毎週・隔週・毎月・毎月末・毎年から選びます。済にすると、期限を同じだけずらした次の回がすぐ下にできます（毎週なら期限の曜日のまま）。</li>
+        <li><b>子タスク</b>：下の欄に書いて Enter で追加（<code>押印申請 期限10/15</code> のように期限も付けられます）。□ で済。進み具合はタスクの行に「子 2/5」と出ます。</li>
+      </ul>
+      <ul>
+        <li><b>タイトル・担当を変える</b>：タイトルの書き換え。<code>@名前</code> を足したり消したりして担当を付け替えます。</li>
+        <li><b>背景・出典</b>：元の資料へのリンク。PC のファイルは「nvim」で gototerm の新しいタブに開きます。</li>
+        <li><b>ノート</b>：Markdown で書けます。「ノートを書く」から保存。</li>
+        <li><b>やらない</b>：やらないと決めたもの。済とは分けて残ります。</li>
+        <li><b>削除</b>：間違えて作ったときだけ。<code>data/trash.md</code> に残ります。</li>
+        <li><b>右上の <code>TASKS.md:12</code></b>：そのタスクの行を gototerm の nvim で開きます。</li>
+      </ul>
+    </section>
+
+    <section id="project" class="rv">
+      <h2><span class="no">05</span>プロジェクトと区分</h2>
+      <p><b>1つのフォルダ＝1つのプロジェクト</b>です。フォルダ直下の <code>TASKS.md</code> がそのプロジェクトのタスクになります。</p>
+      <ol class="steps">
+        <li><b>プロジェクトを足す</b>：そのフォルダで <code>gtask init</code>。TASKS.md ができて登録されます。<code>gtask init --agents</code> にすると、CLAUDE.md（または AGENTS.md）に「残タスクは TASKS.md に書く」と1節足し、以後は Claude Code も Codex も同じファイルを読み書きします（既定では書き換えず、足す内容を表示するだけ）。</li>
+        <li><b>区分を足す</b>：プロジェクトのいちばん下の「＋ 区分を追加」。中身は <code>## 見出し</code> です。</li>
+        <li><b>区分の名前を変える・消す</b>：見出しの右端の「⋯」から。消しても中のタスクは「区分なし」へ移ります。</li>
+        <li><b>プロジェクトの名前を変える</b>：プロジェクト画面の上、ファイルの場所の右の「⋯」から。中身は <code># 見出し</code> です（受信箱は変えられません）。</li>
+        <li><b>済んだものを見る</b>：プロジェクト画面と人の画面の「済も表示」をオンにすると、済・やらないが終わった月ごとに出ます。期間は今月・この3か月・今年・去年・すべて・日付を指定から選べます。人の画面では、件数・プロジェクト別・月別のまとめと「Markdownでコピー」が出ます。件数は目安です（子タスクだけ済んだものは数えず、平均日数は作ってから済むまでの日数で、作業時間ではありません）。新しく足したタスクには作った日（<code>➕</code>）が付き、済むまでの平均日数も出ます。</li>
+        <li><b>人ごとに見る</b>：上の「@ 人」から選ぶと、その人に頼んでいるタスク（<code>@名前</code>）がプロジェクトごとに出ます。「待ち」の名前を押しても同じです。</li>
+        <li><b>よく見るプロジェクトを上のタブに出す</b>：同じ「⋯」の「上のタブに出す」。今日・待ち…の横に並び、1回で開けます。外すのも同じ場所から。</li>
+        <li><b>タスクを別のプロジェクト・区分へ移す</b>：タスクの詳細の「別のプロジェクトへ移す」。子タスク・ノート・背景ごと移ります。</li>
+        <li><b>まとめて振り分ける</b>：Obsidian から読み込んだタスクなどは、Claude Code に「プロジェクトに振り分けて」と頼むと、案を表で出してから移します。</li>
+      </ol>
+      <p class="mut">どのプロジェクトにも入らないもの（受信箱・会社など）は gototask の <code>data/TASKS.md</code> に入ります。</p>
+    </section>
+
+    <section id="claude" class="rv">
+      <h2><span class="no">06</span>Claude との分担</h2>
+      <div class="cards">
+        <div class="card"><b>あなた</b><p>見る・チェックする・☀ を付ける。思いついたら会話で話す。</p></div>
+        <div class="card"><b>Claude</b><p>会話からタスクを足す・直す・済にする。背景のリンクとノートを付ける。</p></div>
+        <div class="card"><b>資料（backlog など）</b><p>「なぜやるか」の正本。済・やらないは Claude が自動で書き戻します。</p></div>
+      </div>
+      <h3>こう話せば伝わります</h3>
+      <ul>
+        <li>「残タスク見せて」「〇〇終わった」「〇〇は山田さんに頼んだ」「それはやらない」</li>
+        <li>「メール見て」…受信トレイからタスクの候補を出します。Gmail を自動で読むことはしません。</li>
+      </ul>
+      <h3>週報のために</h3>
+      <p>議事録や1日の作業を AI に渡すと、済んだものは ✅、進んだことはタスクの下に <code>- 2026-10-16 見積案を提出</code> のような1行（経過）で残ります。週報の画面は、この経過と ✅ の日付から材料を作ります。決まった頼み方は、右上の「AI に頼む」にあります。</p>
+    </section>
+
+    <!--home--><section id="google" class="rv">
+      <h2><span class="no">07</span>スマホ（Google ToDo）</h2>
+      <p>「今日」の画面に入ったタスクが、Google ToDo アプリの <b>「gototask 今日」</b> リスト（許可した Google アカウント）に出ます。</p>
+      <div class="tbl">
+        <div>スマホで完了</div><div>gototask でも済になります。</div>
+        <div>スマホで追加</div><div>gototask の受信箱に「今日やる」として入ります。</div>
+        <div>スマホで削除</div><div>その日は送り直しません。</div>
+        <div>同期のタイミング</div><div>5分ごと＋gototask で操作した直後。右上の点にマウスを乗せると最後の同期時刻が出ます。</div>
+      </div>
+      <p class="mut">送られるのは「今日」のタスクだけです。家庭用のリストとは混ざりません。</p>
+    </section><!--/home-->
+
+    <section id="term" class="rv">
+      <h2><span class="no">08</span>ターミナルと gototerm</h2>
+      <p>ターミナルでは <code>gtask</code> で同じことができます。番号は <code>gtask ls</code> に出る番号です。</p>
+      <div class="term"><div class="bar"><i></i><i></i><i></i></div><pre id="tw"></pre></div>
+      <div class="tbl">
+        <div>gtask init</div><div>今いるフォルダに TASKS.md を作ってプロジェクトに登録。<code>--agents</code> で CLAUDE.md / AGENTS.md に使い方も足す。</div>
+        <div>gtask ls [名前]</div><div>未完了の一覧。プロジェクト名の一部で絞れます。</div>
+        <div>gtask add "…" [-p 名前/区分]</div><div>追加。省略すると今いるフォルダのプロジェクトへ（無ければ受信箱）。</div>
+        <div>gtask today [N]</div><div>今日の一覧／N番を今日やるに（<code>--off</code> で外す）。</div>
+        <div>gtask done / drop / del N</div><div>済／やらない／削除。</div>
+        <div>gtask show N</div><div>背景とノートを表示。</div>
+        <div>gtask open [--all]</div><div>今いるフォルダのタスクをブラウザで開く。</div>
+        <!--home--><div>gtask gsync [--auth]</div><div>Google ToDo と今すぐ同期（<code>--auth</code> は許可の取り直し）。</div><!--/home-->
+      </div>
+      <!--home--><h3>gototerm</h3>
+      <ul>
+        <li>タブバーの右端に <b>残N 優先M</b> が出ます。</li>
+        <li><span class="kbd">Ctrl</span> + <span class="kbd">Shift</span> + <span class="kbd">G</span> で、今いるフォルダに関係するタスクを開きます。</li>
+        <li>タブバーの「残N 優先M」は、今いるフォルダの TASKS.md の数です（無ければ受信箱のファイル）。</li>
+        <li>サイドバーの <b>[tasks]</b>（<span class="kbd">Ctrl+Shift+H</span> でサイドバーに入り、Tab で切り替え）に、今いるフォルダの TASKS.md の残りが出ます。<span class="kbd">l</span> でその行をエディタで開き、<span class="kbd">x</span> で済にします。</li>
+      </ul><!--/home-->
+    </section>
+
+    <section id="file" class="rv">
+      <h2><span class="no">09</span>ファイルの書き方</h2>
+      <p>普段は触らなくて大丈夫です。手で直すとき・Obsidian で開くときの書き方です。<a href="https://publish.obsidian.md/tasks/" target="_blank" rel="noopener">Obsidian Tasks</a> と同じです。</p>
+      <div class="term"><div class="bar"><i></i><i></i><i></i></div><pre><span class="c"># プロジェクト                 ← 無ければフォルダ名</span>
+<span class="c">## 区分</span>
+- [ ] 見積もりを送る @頼んだ相手 ⏫ ⏳ 2026-10-11 📅 2026-10-15
+  背景: company/projects/backlog.md:58   <span class="c">← 参考資料（URL も可）</span>
+  - [ ] 押印申請 📅 2026-10-14            <span class="c">← 字下げした - [ ] は子タスク</span>
+  出典: company/board/current.md         <span class="c">← 拾った元。済・やらないの書き戻し先</span>
+  ノートは字下げして Markdown で
+  - 2026-10-16 見積案を提出              <span class="c">← 経過（日付から始まる行。週報に出ます）</span>
+- [ ] 週報を出す 🔁 every week on Friday 📅 2026-10-23  <span class="c">← 繰り返し</span>
+- [x] 済んだタスク ✅ 2026-10-11
+- [-] やらないと決めたタスク ❌ 2026-10-11</pre></div>
+      <div class="tbl">
+        <div>⏫</div><div>優先</div>
+        <div>⏳ 日付</div><div>今日やる日（☀ を押した日）</div>
+        <div>📅 日付</div><div>期限</div>
+        <div>✅ / ❌ 日付</div><div>済んだ日／やめた日（自動で付きます）</div>
+        <div>➕ 日付</div><div>作った日（自動で付きます）</div>
+        <div>🔁 every …</div><div>繰り返し（Obsidian Tasks と同じ英語。every day / every weekday / every week on Friday / every 2 weeks / every month on the 25th / every month on the last / every year など。末尾に when done で済んだ日から数える）</div>
+      </div>
+    </section>
+
+    <section id="trouble" class="rv">
+      <h2><span class="no">10</span>困ったとき</h2>
+      <div class="tbl">
+        <div>画面が開かない</div><div>Windows は <code>gototask.pyw</code> をダブルクリック。Mac・Linux は <code>gtask serve</code>（動いていればブラウザで開くだけ）。Linux の自動起動は <code>systemctl --user restart gototask</code></div>
+        <div>PC の起動時に立ち上げたい</div><div><code>gtask autostart on</code>（やめるときは <code>off</code>）。初回の設定画面でも選べます。</div>
+        <div>Obsidian のタスクを読み込みたい</div><div>初回の設定画面で保管庫を選ぶと、未完了の <code>- [ ]</code> をノートごとに並べて「読み込みますか」と聞きます。元のノートは書き換えず、<code>背景:</code> 付きで写します（済にしてもノートには書き戻しません）。プロジェクトは、フォルダ（1〜3階層目）・タグ（例：<code>#案件/A社</code> の「A社」）・ノートのプロパティ（例：<code>project</code>）のどれで分けるかを選べます。分け方を変えると、どのプロジェクトに何件入るかがその場で出ます。あとからでも <code>localhost:8765/setup</code> で同じ手順をやり直せます（同じタスクは二重になりません）。</div>
+        <!--home--><div>右上の点が黄色（許可が切れた）</div><div><code>gtask gsync --auth</code> で、Google アカウントを選び直して許可。</div><!--/home-->
+        <div>名前・アイコンを変えたい</div><div>右上の「設定」で、画面の名前と、アイコン（フラスコ／シンプル）を変えられます。その PC だけの設定です。</div>
+        <div>「保存しませんでした」と出た</div><div>画面を開いた後に、AI などが同じタスクを書き換えていました（古い画面のまま保存して、AI の書き足しを消さないためです）。ノートを書いていた場合は、書いた文が下に残っているので、コピーしてから最新の内容に貼り直してください。</div>
+        <div>Obsidian を使っていない</div><div>そのままで使えます。初回の画面で「この PC の中だけで始める」を選び、今あるやることを1行ずつ貼ると、そのまま入ります。</div>
+        <div>消したタスクを戻したい</div><div><code>data/trash.md</code> に残っています。Claude に「戻して」と言えば戻します。</div>
+      </div>
+      <div class="note">わからないことは、Claude に「gototask の〇〇どうやるの？」と聞いてください。</div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function(){
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 冒頭の一文をタイプする
+  var p = document.getElementById('typed'), text = p.dataset.text, i = 0;
+  var caret = '<span class="caret"></span>';
+  function type(){ p.innerHTML = text.slice(0, i) + caret; if (i++ < text.length) setTimeout(type, 55); }
+  still ? (p.textContent = text) : setTimeout(type, 400);
+
+  // 節が見えたら浮かび上がる＋目次を光らせる
+  var links = {};
+  document.querySelectorAll('.toc a[href^="#"]').forEach(function(a){ links[a.getAttribute('href').slice(1)] = a; });
+  var io = new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) e.target.classList.add('in'); }); }, {threshold: .12});
+  var spy = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if (e.isIntersecting){ Object.values(links).forEach(function(a){ a.classList.remove('on'); });
+      var a = links[e.target.id]; if (a) a.classList.add('on'); } });
+  }, {rootMargin: '-40% 0px -55% 0px'});
+  document.querySelectorAll('.rv').forEach(function(el){ io.observe(el); spy.observe(el); });
+
+  // 見本：○ と ☀
+  document.querySelectorAll('.demo .chk').forEach(function(b){ b.addEventListener('click', function(){ b.closest('.trow').classList.toggle('done'); }); });
+  document.querySelectorAll('.demo .sun').forEach(function(b){ b.addEventListener('click', function(){ b.classList.toggle('on'); }); });
+
+  // ターミナル：見えたら打ち込む
+  var tw = document.getElementById('tw');
+  var script = [
+    ['$ ', 'gtask init --agents'], ['', 'TASKS.md を作りました\ngototask に登録しました\nCLAUDE.md に TASKS.md の使い方を1節足しました\n'],
+    ['$ ', 'gtask ls 営業'], ['', '# 営業部\n  見積もり\n   4 ● 見積もりの型を送る @山田さん …\n'],
+    ['$ ', 'gtask add "提案書の構成" -p 営業/資料'], ['', '追加しました（営業部 / 資料）: 提案書の構成\n'],
+    ['$ ', 'gtask today 4'], ['', '今日やる: 見積もりの型を送る\n']
+  ];
+  var started = false;
+  function run(){
+    var html = '', k = 0;
+    function line(){
+      if (k >= script.length){ tw.innerHTML = html + '<span class="ps">$ </span><span class="cur"></span>'; return; }
+      var ps = script[k][0], s = script[k][1], j = 0;
+      if (!ps){ html += s.replace(/</g, '&lt;'); tw.innerHTML = html; k++; return setTimeout(line, 350); }
+      (function ch(){
+        tw.innerHTML = html + '<span class="ps">$ </span>' + s.slice(0, j).replace(/</g, '&lt;') + '<span class="cur"></span>';
+        if (j++ < s.length) return setTimeout(ch, 38);
+        html += '<span class="ps">$ </span>' + s.replace(/</g, '&lt;') + '\n'; k++; setTimeout(line, 300);
+      })();
+    }
+    line();
+  }
+  if (still){ tw.innerHTML = script.map(function(x){ return (x[0] ? '<span class="ps">$ </span>' : '') + x[1].replace(/</g, '&lt;') + (x[0] ? '\n' : ''); }).join(''); }
+  else new IntersectionObserver(function(es, o){ if (es[0].isIntersecting && !started){ started = true; o.disconnect(); run(); } }, {threshold: .5}).observe(tw);
+})();
+</script>
+</body>
+</html>

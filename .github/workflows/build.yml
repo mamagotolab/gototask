@@ -1,0 +1,31 @@
+# Windows 用の gototask.exe を作る。v から始まるタグを push するとリリースに付ける（手動でも動かせる）
+name: build
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller==6.19.0
+      - run: pyinstaller --noconfirm --onefile --windowed --name gototask --add-data "static;static" gototask.pyw
+      - name: SHA-256
+        shell: pwsh
+        run: (Get-FileHash dist/gototask.exe -Algorithm SHA256).Hash | Tee-Object dist/gototask.exe.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gototask-windows
+          path: dist/gototask.exe*
+      - if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} dist/gototask.exe dist/gototask.exe.sha256 --title ${{ github.ref_name }} --notes "Windows 用。ダウンロードしてダブルクリックで起動します（Python は不要）。"
