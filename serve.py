@@ -219,7 +219,7 @@ class Ctx:
 
     def __init__(self, view, sel, order="", hist=None):
         self.view, self.sel, self.order = view, sel, order
-        self.hist = {k: v for k, v in (hist or {}).items() if v}  # done=1・per・from・to（済も表示と期間）・r・wk（週報の範囲と週）
+        self.hist = {k: v for k, v in (hist or {}).items() if v}  # done=1・per・from・to（済も表示と期間）
         self.files = T.files()
         self.today = T.today_str()
         self.back = "/?" + urlencode({"v": view, **({"o": order} if order else {}), **self.hist})
@@ -760,179 +760,14 @@ def view_dir(d, open_, c):
     ref = "~/" + str(d.relative_to(T.HOME)) if d.is_relative_to(T.HOME) else str(d)
     return d.name or str(d), quick(c, ref=ref), "".join(parts)
 
-# ---------- 週報 ----------
-
-def ranges(projects):
-    """設定の「週報の範囲」（1行に「名前: プロジェクト, プロジェクト」。名前に別の範囲を入れると、その中身ごと入る）
-    → ({範囲: [プロジェクト…]}, 見つからない名前)。同じプロジェクトは1回だけ数える。"""
-    defs = {}
-    for line in str(T.settings().get("ranges", "")).splitlines():
-        name, sep, rest = line.replace("：", ":").partition(":")
-        if sep and name.strip():
-            defs[name.strip()] = [x.strip().lstrip("#") for x in re.split(r"[,、，]", rest) if x.strip()]
-    missing = []
-
-    def expand(name, seen):
-        out = []
-        for x in defs.get(name, []):
-            if x in defs and x not in seen:
-                out += expand(x, seen | {x})
-            elif x in projects:
-                out.append(x)
-            elif x not in missing:
-                missing.append(x)
-        return out
-
-    return {k: list(dict.fromkeys(expand(k, {k}))) for k in defs}, missing
-
-
-WEEKS = {"this": "今週", "last": "先週", "custom": "日付を指定"}
-# 週報の書き出し方：(選択肢の名前, 拡張子, AI への書き方の指示)
-FORMATS = {
-    "md": ("Markdown", "md", "Markdown で書く（見出しは ##、箇条書きは -）"),
-    "txt": ("テキスト", "txt", "テキストで書く。#・**・表などの Markdown の記号は使わず、見出しは「■」、箇条書きは「・」にして、メールやチャットにそのまま貼れる形にする"),
-    "html": ("HTML", "html", "1つで開ける HTML ファイルで書く。CSS はファイルの中に書き、外部のファイル・JavaScript は使わない。見出し・箇条書き・必要なら表で読みやすくし、印刷しても崩れないようにする"),
-}
-
-
-def md_to_text(md):
-    """週報の材料（Markdown）を、記号の無いテキストに（メール・チャットに貼る用）。"""
-    out = []
-    for l in md.splitlines():
-        if l.startswith("### "):
-            l = "◆ " + l[4:]
-        elif l.startswith("## "):
-            l = "■ " + l[3:]
-        elif l.startswith("# "):
-            l = "【" + l[2:] + "】"
-        elif l.startswith("- "):
-            l = "・" + l[2:]
-        out.append(l)
-    return "\n".join(out)
-
-
-def report_period(c):
-    """週報の期間 → (いつから, いつまで, 見出し)。週は月曜はじまり。"""
-    today = datetime.date.fromisoformat(c.today)
-    wk = c.hist.get("wk") if c.hist.get("wk") in WEEKS else "this"
-    mon = today - datetime.timedelta(days=today.weekday())
-    if wk == "custom":
-        ok = lambda v: v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v or "") else ""
-        a, b = ok(c.hist.get("from")) or mon.isoformat(), ok(c.hist.get("to")) or today.isoformat()
-        return a, b, f"{a}〜{b}"
-    if wk == "last":
-        mon -= datetime.timedelta(days=7)
-    a, b = mon, mon + datetime.timedelta(days=6)
-    return a.isoformat(), b.isoformat(), f"{a.isoformat()}〜{b.isoformat()}"
-
-
-def md_day(d):
-    return f"{int(d[5:7])}/{int(d[8:])}" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d or "") else d
-
-
-def report_parts(ts, a, b, nxt_a, nxt_b, today):
-    """1プロジェクトの週報の材料。済・進んだ（経過と子タスク）・新しく・来週の期限・期限切れ・待ち。"""
-    within = lambda d: bool(d) and a <= d <= b
-    done = [t for t in ts if t["done"] and not t["dropped"] and within(t["closed"])]
-    moved = [(d, txt, t) for t in ts for d, txt in t["log"] if within(d)]
-    moved += [(x["closed"], "子タスク済：" + x["title"], t) for t in ts if t not in done for x in t["subs"]
-              if x["done"] and not x["dropped"] and within(x["closed"])]
-    moved.sort(key=lambda m: m[0])
-    new = [t for t in ts if within(t["fields"].get("➕", "")) and t not in done and not t["dropped"]]
-    open_ = [t for t in ts if not t["done"]]
-    soon = sorted((t for t in open_ if t["due"] and nxt_a <= t["due"] <= nxt_b), key=lambda t: t["due"])
-    late = sorted((t for t in open_ if t["due"] and t["due"] < today), key=lambda t: t["due"])
-    waiting = [t for t in open_ if t["who"]]
-    return dict(done=done, moved=moved, new=new, soon=soon, late=late, waiting=waiting)
-
-
-def view_report(tasks, projects, c):
-    """週報の材料：範囲（プロジェクトの束）と週を選ぶと、プロジェクトごとに事実を並べる。文章にするのは AI。"""
-    rs, missing = ranges(projects)
-    r = c.hist.get("r") if c.hist.get("r") in rs else ""
-    a, b, label = report_period(c)
-    nxt_a = (datetime.date.fromisoformat(b) + datetime.timedelta(days=1)).isoformat()
-    nxt_b = (datetime.date.fromisoformat(b) + datetime.timedelta(days=7)).isoformat()
-    scope = rs[r] if r else [p for p in projects]
-    name = r or "すべて"
-    wk = c.hist.get("wk") if c.hist.get("wk") in WEEKS else "this"
-    fmt = c.hist.get("fmt") if c.hist.get("fmt") in FORMATS else "md"
-    fname, ext, how = FORMATS[fmt]
-    bar = (f'<form class="hist" method="get" action="/"><input type="hidden" name="v" value="report">'
-           f'<select name="r" onchange="this.form.submit()" aria-label="範囲"><option value="">すべてのプロジェクト</option>'
-           + "".join(f'<option{" selected" if k == r else ""}>{esc(k)}</option>' for k in rs) + '</select>'
-           f'<select name="wk" onchange="this.form.submit()" aria-label="週">'
-           + "".join(f'<option value="{k}"{" selected" if k == wk else ""}>{v}</option>' for k, v in WEEKS.items()) + '</select>'
-           + (f'<input type="date" name="from" value="{esc(a)}" onchange="this.form.submit()" aria-label="いつから"><span class="mut">〜</span>'
-              f'<input type="date" name="to" value="{esc(b)}" onchange="this.form.submit()" aria-label="いつまで">' if wk == "custom"
-              else f'<span class="mut small">{esc(label)}</span>')
-           + f'<select name="fmt" onchange="this.form.submit()" aria-label="週報の形式">'
-           + "".join(f'<option value="{k}"{" selected" if k == fmt else ""}>{v[0]}で書き出す</option>' for k, v in FORMATS.items())
-           + '</select><a class="lnk small" href="/settings#ranges">範囲を決める</a></form>')
-    body, md, tot = [], [], dict(done=0, moved=0, new=0, late=0)
-    undated = 0
-    for p in scope:
-        ts = [t for t in tasks if t["project"] == p]
-        undated += sum(t["done"] and not t["dropped"] and not t["closed"] for t in ts)
-        x = report_parts(ts, a, b, nxt_a, nxt_b, c.today)
-        if not any(x.values()):
-            continue
-        for k in tot:
-            tot[k] += len(x[k])
-        link = lambda t: f'<a href="/?{esc(urlencode({"v": "p:" + p}))}&amp;s={c.tid(t)}#t-{c.tid(t)}">{esc(t["title"])}</a>'
-        who = lambda t: "".join(f'<span class="chip who">@{esc(w)}</span>' for w in t["who"])
-        blocks = [
-            ("済んだ", [f'{link(t)}<small>✅ {md_day(t["closed"])}</small>' for t in x["done"]],
-             [f'- {t["title"]}（{md_day(t["closed"])}）' for t in x["done"]]),
-            ("進んだ", [f'<small>{md_day(d)}</small>{link(t)}<span class="mut">：{esc(txt)}</span>' for d, txt, t in x["moved"]],
-             [f'- {md_day(d)} {t["title"]}：{txt}' for d, txt, t in x["moved"]]),
-            ("新しく入った", [f'{link(t)}{who(t)}' for t in x["new"]], [f'- {t["title"]}' + "".join(f" @{w}" for w in t["who"]) for t in x["new"]]),
-            ("来週の期限", [f'{link(t)}<small>📅 {md_day(t["due"])}</small>{who(t)}' for t in x["soon"]],
-             [f'- {t["title"]}（期限 {md_day(t["due"])}）' + "".join(f" @{w}" for w in t["who"]) for t in x["soon"]]),
-            ("期限切れ（いま）", [f'{link(t)}<small class="late">📅 {md_day(t["due"])}</small>{who(t)}' for t in x["late"]],
-             [f'- {t["title"]}（期限 {md_day(t["due"])}）' for t in x["late"]]),
-            ("待ち（いま）", [f'{link(t)}{who(t)}' for t in x["waiting"]],
-             [f'- {t["title"]}' + "".join(f" @{w}" for w in t["who"]) for t in x["waiting"]]),
-        ]
-        body.append(sec(p))
-        md += ["", f"## {p}"]
-        for title, items, lines in blocks:
-            if items:
-                body.append(f'<div class="rp"><h4>{title}<b>{len(items)}</b></h4><ul>{"".join(f"<li>{i}</li>" for i in items)}</ul></div>')
-                md += [f"### {title}", *lines]
-    head = f"# 週報 {name}（{label}）"
-    nums = f'済 {tot["done"]}件・進んだ {tot["moved"]}件・新しく {tot["new"]}件・期限切れ {tot["late"]}件'
-    note = []
-    if undated:
-        note.append(f"済んだ日の無いもの {undated}件は入れていません")
-    if missing:
-        note.append("範囲の設定に、見つからないプロジェクトがあります：" + "、".join(missing))
-    material = "\n".join([head, nums, *md]).strip()
-    if fmt == "txt":
-        material = md_to_text(material)
-    ask = (f"次の材料から「{name}」の週報（{label}）を書いてください。\n"
-           "- 材料と TASKS.md の経過（タスクの下の「- 日付 内容」）に書いてあることだけを使う。書いていないことを推測で補わない（「順調」「来週やる」などを足さない）\n"
-           "- 順番は「成果」「進んでいること」「課題・判断してほしいこと」「来週の予定」。1項目1行で短く\n"
-           "- 足りない情報は、最後に「確認したいこと」として並べる\n"
-           f"- {how}\n"
-           f"- 書き上げたら 週報/{b}_{name}.{ext} に保存する\n\n---\n{material}")
-    summary = (f'<section class="review"><div class="rv-nums"><span><b>{tot["done"]}</b>済</span><span><b>{tot["moved"]}</b>進んだ</span>'
-               f'<span><b>{tot["new"]}</b>新しく</span><span><b>{tot["late"]}</b>期限切れ</span>'
-               f'<button type="button" class="lnk" data-copy="rpmd">材料をコピー（{fname if fmt == "txt" else "Markdown"}）</button>'
-               f'<button type="button" class="lnk" data-copy="rpask">AI に頼む文をコピー</button></div>'
-               + "".join(f'<p class="mut small">{esc(n)}</p>' for n in note)
-               + f'<textarea id="rpmd" hidden>{esc(material)}</textarea><textarea id="rpask" hidden>{esc(ask)}</textarea></section>')
-    if not body:
-        body = [empty("この期間に済んだもの・進んだもの・新しく入ったものはありません。"
-                      "AI に議事録などを渡して、進んだことをタスクの下に「- 日付 内容」で書いてもらうと、ここに出ます。")]
-    return f"週報 · {name}", quick(c), bar + summary + "".join(body)
-
-
 # ---------- AI への頼み方 ----------
 
 def asks():
     """画面からコピーして AI（Claude Code・Codex）に渡す、決まった頼み方。"""
     today = T.today_str()
+    d0 = datetime.date.today()
+    mon = d0 - datetime.timedelta(days=d0.weekday())
+    week = f"{mon.isoformat()}〜{(mon + datetime.timedelta(days=6)).isoformat()}"
     return [
         ("議事録・メモからタスクを更新", "会議のあとに。議事録やメールを貼るだけで、追加・済・経過までまとめて直します。",
          "次の議事録（メモ）を読んで、TASKS.md を更新してください。\n"
@@ -944,6 +779,12 @@ def asks():
          f"今日（{today}）進んだこと・済んだことを TASKS.md に反映してください。\n"
          f"- 済んだものは ✅、進んだものはそのタスクの下に「- {today} 内容」で足す\n"
          "- 新しく出てきた依頼・約束・待ちはタスクに足す\n\n---\n（ここに今日やったことを箇条書きで）"),
+        ("週報を書く", "週の終わりに。過去の週報を見本に、いつもの型で今週分を書いてもらいます。",
+         f"今週（{week}）の週報を書いてください。\n"
+         "- 見本：過去の週報（置き場所：ここに書く。例：週報/ フォルダ）を読み、いちばん新しいものと同じ型・見出し・言い回し・長さで書く\n"
+         "- 材料：TASKS.md のうち、この期間に ✅ が付いたものと、タスクの下の経過（「- 日付 内容」）。過去の週報に続きのある件は、その続きとして書く\n"
+         "- 材料に無いことは推測で補わない（「順調」などを足さない）。足りないところは最後に「確認したいこと」として並べる\n"
+         "- 書き上げたら、過去の週報と同じ場所に、同じ名前の付け方で保存する\n\n---\n（今週の会議メモなど、ほかに入れたいことがあればここに貼る）"),
         ("残りを点検", "週のはじめに。古いもの・期限切れを片付けます。",
          "TASKS.md の残りを点検してください。期限切れ・今週の期限・1か月以上動いていないものを表で出し、"
          "それぞれ「続ける（期限を直す）」「やらない」「人に頼む」の案を付けて、私の確認を待ってください。"),
@@ -966,8 +807,7 @@ def ai_page():
                  f'<a class="brand" href="/"><img src="/flask.png" alt="">gototask</a><h1>AI に頼む</h1>'
                  f'<p class="lead">gototask のタスクは、Claude Code や Codex に会話で書いてもらうのがいちばん楽です。'
                  f'下の文をコピーして、AI に貼ってください。AI は、次のフォルダで開きます。</p><ul class="ok">{where}</ul>'
-                 f'{cards}<h2>週報</h2><p class="note">週報の画面で範囲と週を選び、「AI に頼む文をコピー」を押すと、材料ごとコピーできます。'
-                 f'<a href="/?v=report">週報を開く</a></p><div class="acts"><a class="skip" href="/">戻る</a></div></main>'
+                 f'{cards}<div class="acts"><a class="skip" href="/">戻る</a></div></main>'
                  + COPY_JS)
 
 
@@ -1011,13 +851,11 @@ def page(view, sel, order="", hist=None, flash="", keep=""):
         title, q, body = view_find(view[5:], tasks, c)
     elif view.startswith("w:"):
         title, q, body = view_person(view[2:], tasks, open_, c)
-    elif view == "report":
-        title, q, body = view_report(tasks, projects, c)
     else:
         title, q, body = view_dir(Path(view[4:]), open_, c)
     due, picked, _ = T.today_groups(open_)
     lenses = [("today", "今日", len(due) + len(picked)), ("wait", "待ち", sum(bool(t["who"]) for t in open_)),
-              ("imp", "優先", sum(t["important"] for t in open_)), ("all", "すべて", len(open_)), ("report", "週報", 0)]
+              ("imp", "優先", sum(t["important"] for t in open_)), ("all", "すべて", len(open_))]
     nav = "".join(f'<a class="lens{" on" if view == k else ""}" href="/?v={k}">{n}<b>{v or ""}</b></a>' for k, n, v in lenses)
     nav += '<span class="divider"></span>'
     # プロジェクトは横に並べず、1つの切り替えボタン＋検索できる一覧にする（p キーでも開く）。⋯ で選んだものだけ上のタブに出す
@@ -1335,9 +1173,6 @@ border-radius:14px;background:var(--input);box-shadow:var(--shadow);font-size:14
 .hist .tog{display:flex;gap:6px;align-items:center;cursor:pointer}.hist select,.hist input[type=date]{padding:5px 8px;border:1px solid var(--line2);
 border-radius:8px;background:var(--input);color:var(--fg);font:inherit;font-size:13px}
 .histlist{margin-top:30px}
-.rp{margin:6px 2px 14px}.rp h4{margin:10px 0 4px;font-size:13px;font-weight:500;color:var(--mut);display:flex;gap:6px}.rp h4 b{color:var(--acc);font-weight:500}
-.rp ul{margin:0;padding-left:18px}.rp li{margin:3px 0;line-height:1.6}.rp li small{margin:0 8px;color:var(--mut);font-family:"JetBrains Mono",monospace}
-.rp li small.late{color:var(--late)}.rp li .chip{margin-left:6px}.rv-nums .lnk+.lnk{margin-left:0}
 .chip.rep{color:var(--ok)}
 .review{margin:0 0 18px;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--glass)}
 .rv-nums{display:flex;flex-wrap:wrap;gap:8px 22px;align-items:baseline}.rv-nums span{color:var(--sub);font-size:13px}
@@ -1501,10 +1336,6 @@ def settings_page():
                  f'<p class="note">空なら元の名前に戻ります。タブ・見出し・使い方の名前が変わります。</p>'
                  f'<h2>アイコン</h2>{radio("flask", not plain, flask, "フラスコ")}{radio("plain", plain, "/icon.svg", "シンプル（チェックの印）")}'
                  f'<p class="note">シンプルにすると、ターミナル連携とスマホ同期の説明・リンクも出さず、PC の自動起動の登録名も「{autostart_name()}」にします。</p>'
-                 f'<h2 id="ranges">週報の範囲</h2><textarea name="ranges" rows="5" class="ranges" placeholder="1課: 営業A, 営業B&#10;2課: 営業C&#10;営業部: 1課, 2課">'
-                 f'{esc(str(st.get("ranges", "")))}</textarea>'
-                 f'<p class="note">1行に「名前: プロジェクト, プロジェクト」。名前に別の範囲を書くと、その中身ごと入ります（同じプロジェクトは1回だけ数えます）。'
-                 f'週報の画面で選べるようになります。</p>'
                  f'<div class="acts"><button>保存する</button><a class="skip" href="/">戻る</a></div></form></main>')
 
 
@@ -1772,9 +1603,9 @@ class Handler(BaseHTTPRequestHandler):
                 view = view if view[5:].strip() else "today"
             elif view.startswith("w:"):
                 view = view if any(view[2:] in t["who"] for t in tasks) else "wait"
-            elif view not in ("today", "wait", "imp", "all", "report") and not (view.startswith("p:") and view[2:] in projects):
+            elif view not in ("today", "wait", "imp", "all") and not (view.startswith("p:") and view[2:] in projects):
                 view = "today"
-            hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to", "r", "wk", "fmt")}
+            hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to")}
             return self.send(200, page(view, q.get("s", [""])[0], q.get("o", [""])[0], hist, q.get("m", [""])[0]))
         if u.path == "/open":
             if self.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -1829,8 +1660,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings":
             form = parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode(), keep_blank_values=True)
             name = " ".join(form.get("name", [""])[0].split())[:40]
-            T.save_settings(name=name, icon="plain" if form.get("icon", [""])[0] == "plain" else "flask",
-                            ranges=form.get("ranges", [""])[0].replace("\r\n", "\n").strip()[:4000])
+            T.save_settings(name=name, icon="plain" if form.get("icon", [""])[0] == "plain" else "flask")
             try:
                 import autostart
                 autostart.refresh()  # 自動起動の登録名も合わせる（Windows）
@@ -1950,7 +1780,7 @@ class Handler(BaseHTTPRequestHandler):
         tasks, projects, _ = T.load()
         if view.startswith("p:") and view[2:] not in projects:
             view = "today"
-        hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to", "r", "wk", "fmt")}
+        hist = {k: q.get(k, [""])[0] for k in ("done", "per", "from", "to")}
         return page(view, "", q.get("o", [""])[0], hist, m, keep)
 
     def log_message(self, *a):
