@@ -17,6 +17,8 @@ AI が会話で書き、人は画面で見て直す ToDo です。
 
 設定やタスクは `%APPDATA%\gototask` に保存されます。
 
+ターミナルでも使うなら、同じ Releases の `gtask.exe` を PATH の通ったフォルダに置きます。`gtask ls` / `gtask add "…"` / `gtask done 3` などが使え、gototerm の右クリックメニューにも gototask が出ます。データは `gototask.exe` と共通です。
+
 ### Python がある PC（Windows・Mac・Linux）
 
 ```sh
