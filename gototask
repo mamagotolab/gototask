@@ -35,6 +35,10 @@ import tasksmd as T  # noqa: E402
 PORT = int(os.environ.get("GOTOTASK_PORT", "8765"))
 URL = os.environ.get("GOTOTASK_URL", f"http://localhost:{PORT}/")
 TTY = sys.stdout.isatty()
+# Windows でパイプに出すと既定が cp1252/cp932 になり、日本語や 📅 で落ちる。画面以外は UTF-8 で出す。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream and not _stream.isatty() and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 
 def c(code, s):
